@@ -1,0 +1,77 @@
+{
+  "name": "requirements-generator",
+  "displayName": "RequirementsGen (@reqgen)",
+  "description": "AI-powered requirements generator that analyzes Java code and creates detailed PRD documents using GitHub Copilot",
+  "version": "0.1.0",
+  "license": "MIT",
+  "author": "RequirementsGen Contributors",
+  "publisher": "your-publisher-name",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-username/requirements-generator"
+  },
+  "homepage": "https://github.com/your-username/requirements-generator#readme",
+  "bugs": {
+    "url": "https://github.com/your-username/requirements-generator/issues"
+  },
+  "keywords": [
+    "requirements",
+    "documentation",
+    "java",
+    "analysis",
+    "github-copilot",
+    "chat-participant",
+    "prd",
+    "business-analysis"
+  ],
+  "engines": {
+    "vscode": "^1.102.0"
+  },
+  "categories": [
+    "AI",
+    "Chat"
+  ],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "document-generator.reqgen",
+        "name": "reqgen",
+        "description": "Generate detailed requirements documents from Java code analysis",
+        "isSticky": true
+      }
+    ],
+    "commands": [
+      {
+        "command": "document-generator.analyzeFile",
+        "title": "Analyze File for Requirements"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "webpack",
+    "watch": "webpack --watch",
+    "package": "webpack --mode production --devtool hidden-source-map",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.102.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "20.x",
+    "@typescript-eslint/eslint-plugin": "^8.31.1",
+    "@typescript-eslint/parser": "^8.31.1",
+    "eslint": "^9.25.1",
+    "typescript": "^5.8.3",
+    "ts-loader": "^9.5.2",
+    "webpack": "^5.99.7",
+    "webpack-cli": "^6.0.1",
+    "@vscode/test-cli": "^0.0.11",
+    "@vscode/test-electron": "^2.5.2"
+  }
+}
