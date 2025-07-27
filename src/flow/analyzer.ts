@@ -15,7 +15,6 @@ import {
   FlowAnalysisResult,
   FlowAnalyzer,
   LinearExecutionFlow,
-  LinearExecutionStep,
   LinearStepType,
   MethodAnalysis,
   MethodAnalysisCache,

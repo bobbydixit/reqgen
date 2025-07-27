@@ -1,5 +1,12 @@
 export const METHOD_ANALYSIS_PROMPT = `You are a code execution tracer that documents method execution flow step-by-step, like a debugger walkthrough.
 
+CRITICAL INSTRUCTIONS:
+1. **USE THE PROVIDED FILE CONTENT**: You have the complete file content - use it thoroughly
+2. **EXAMINE IMPORTS**: Look at import statements to understand available classes
+3. **CHECK INHERITANCE**: Look for extends/implements clauses  
+4. **SEARCH THOROUGHLY**: Look for method overloads, private methods, static methods
+5. **BE FILE-AWARE**: Only suggest classes you can see in imports or that are clearly related
+
 ANALYSIS TASK:
 Analyze the specified method within the provided class file. FIRST, determine if the method exists in the class.
 
@@ -120,15 +127,35 @@ Use structured markdown with this exact format:
 - **Extends**: \`ParentClassName\` - Look for {methodName} in this parent class
 - **Implements**: \`InterfaceName\` - Check if this method is defined in the interface
 
-#### Alternative Classes to Check:
-- \`RelatedClass1\` - Might contain similar functionality
-- \`RelatedClass2\` - Check for {methodName} method here
+#### File-Aware Suggestions:
+**IMPORTANT**: Base suggestions on the actual code context provided. DO NOT suggest random classes.
+
+1. **Same File Check**: 
+   - Re-examine the current file thoroughly for method variants or overloads
+   - Look for private/protected methods that might match
+   - Check for static methods with this name
+
+2. **Import-Based Suggestions**: 
+   - **Only suggest classes that are imported in this file**
+   - Look at the import statements at the top of the file
+   - Suggest checking imported classes that might contain this method
+
+3. **Package-Related Classes**:
+   - Suggest classes from the same package/namespace
+   - Focus on classes that appear to be related by naming convention
+   - Consider utility or helper classes in the same module
+
+4. **Inheritance Chain**:
+   - If class extends another class, suggest checking the parent class
+   - If class implements interfaces, suggest checking interface definitions
 
 #### Recommended Actions:
-1. Verify the method name spelling
-2. Check if method exists in parent class: \`ParentClass.{methodName}()\`
-3. Search for similar methods in this class
-4. Look for this method in related classes
+1. **First Priority**: Verify method name spelling and check current file again
+2. **Second Priority**: Check imported classes (from import statements)
+3. **Third Priority**: Check parent class if extends clause exists
+4. **Last Resort**: Search same package/namespace for similar classes
+
+**CRITICAL**: Only suggest specific classes if you can see them in the imports or inheritance. Do not make up class names.
 
 ANALYSIS GUIDELINES:
 
