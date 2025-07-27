@@ -1,7 +1,7 @@
 export const METHOD_ANALYSIS_PROMPT = `You are a code execution tracer that documents method execution flow step-by-step, like a debugger walkthrough.
 
 ANALYSIS TASK:
-Analyze the specified method within the provided class file. Focus on the target method but use the full class context for better understanding of variables, fields, and method relationships.
+Analyze the specified method within the provided class file. FIRST, determine if the method exists in the class.
 
 TARGET METHOD:
 Class: {className}
@@ -13,10 +13,14 @@ FULL CLASS FILE:
 {fileContent}
 \`\`\`
 
-FOCUS: Analyze the method "{methodName}" within this class, but use the full class context for understanding.
+STEP 1 - METHOD DETECTION:
+First, check if the method "{methodName}" exists in the class "{className}". Look for:
+- Method declarations: public/private/protected {methodName}(
+- Static methods: static {methodName}(
+- Package-private methods: {methodName}(
 
-EXECUTION FLOW ANALYSIS:
-Break the method into execution blocks and document the flow. For each block:
+STEP 2 - IF METHOD EXISTS:
+Analyze the method execution flow with semantic blocks:
 
 1. **Identify semantic blocks** (not line-by-line):
    - Variable assignments
@@ -36,8 +40,22 @@ Break the method into execution blocks and document the flow. For each block:
    - **Don't Step Into**: Framework code, utility libraries, external APIs
    - **Mark as External**: Calls where implementation not found
 
+STEP 3 - IF METHOD NOT FOUND:
+Provide helpful suggestions:
+- List similar method names found in the class
+- Check if the class extends another class and suggest looking there
+- Look for interfaces the class implements
+- Suggest alternative classes that might contain this method
+
 OUTPUT FORMAT:
 Use structured markdown with this exact format:
+
+## Method Analysis: {className}.{methodName}()
+
+### Method Detection Result:
+[STATE WHETHER METHOD WAS FOUND OR NOT]
+
+**IF METHOD FOUND:**
 
 ## Method Analysis: {className}.{methodName}()
 
@@ -70,10 +88,31 @@ Use structured markdown with this exact format:
 - \`frameworkClass.utilityMethod()\` - Framework utility
 - \`library.externalAPI()\` - External service call
 
-#### Implementation Not Found:
-- \`SomeClass.missingMethod()\` - ⚠️ Implementation not available
-  - **Inferred Purpose**: [Best guess from method name/context]
-  - **Expected Behavior**: [What this method likely does]
+**IF METHOD NOT FOUND:**
+
+### Method Not Found
+
+❌ **Method \`{methodName}\` not found in class \`{className}\`**
+
+**Suggestions:**
+
+#### Similar Methods Found:
+- \`methodName1()\` - [Brief description of what it does]
+- \`methodName2()\` - [Brief description of what it does]
+
+#### Check Parent Classes:
+- **Extends**: \`ParentClassName\` - Look for {methodName} in this parent class
+- **Implements**: \`InterfaceName\` - Check if this method is defined in the interface
+
+#### Alternative Classes to Check:
+- \`RelatedClass1\` - Might contain similar functionality
+- \`RelatedClass2\` - Check for {methodName} method here
+
+#### Recommended Actions:
+1. Verify the method name spelling
+2. Check if method exists in parent class: \`ParentClass.{methodName}()\`
+3. Search for similar methods in this class
+4. Look for this method in related classes
 
 ANALYSIS GUIDELINES:
 
@@ -92,10 +131,11 @@ Document as:
   - Utility libraries (Apache Commons, etc.)
   - External service calls
 
-**Error Handling**:
-- If method implementation not found, mark as "Implementation Not Found"
-- Provide inferred purpose from method name and context
-- Continue analysis without stopping
+**Method Detection**:
+- Look carefully through the entire class file
+- Check for method overloads with different parameters
+- Look for both public and private methods
+- Consider static methods as well
 
 **Be Specific**:
 - Use actual class names and method names from the code

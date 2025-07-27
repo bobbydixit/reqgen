@@ -1,3 +1,5 @@
+import * as vscode from 'vscode';
+
 /**
  * Core data structures for code flow analysis system
  * Implements DP-based method analysis with call stack tracing
@@ -150,6 +152,7 @@ export interface FlowAnalyzer {
   analyzeMethodFlow(
     className: string, 
     methodName: string,
+    stream?: vscode.ChatResponseStream,
     config?: Partial<AnalysisConfig>
   ): Promise<string>; // Returns formatted markdown
   

@@ -55,7 +55,7 @@ To change models, use: \`@reqgen flow change-model\``);
       console.log('[FLOW] Parsing flow request');
       // Parse the request for standard flow analysis
       const { className, methodName } = this.parseFlowRequest(prompt);
-      console.log('[FLOW] Parsed result - className:', className, 'methodName:', methodName);
+      console.log('[FLOW] Parsed result - className:', JSON.stringify(className), 'methodName:', JSON.stringify(methodName));
       
       if (!className || !methodName) {
         console.log('[FLOW] Missing className or methodName, showing error');
@@ -63,12 +63,15 @@ To change models, use: \`@reqgen flow change-model\``);
 
 **Usage**: 
 - \`@reqgen flow ClassName methodName\`
-- \`@reqgen flow current methodName\`
+- \`@reqgen flow current methodName\` (use currently open file)
 
 **Examples**:
 - \`@reqgen flow UserService createUser\`
 - \`@reqgen flow FourWheelerFinalQuoteFetchExecutor processExecutorRequest\`
-- \`@reqgen flow current validateOrder\``);
+- \`@reqgen flow current validateOrder\` (analyzes method in currently open file)
+- \`@reqgen flow current main\` (analyzes main method in currently open file)
+
+**Note**: Make sure you have a source file open in the editor when using "current"`);
         return { metadata: { command: 'flow_error' } };
       }
 
@@ -80,12 +83,11 @@ Starting debugger-style execution flow analysis...
 `);
 
       console.log('[FLOW] Calling analyzer.analyzeMethodFlow');
-      // Perform flow analysis
-      const result = await this.analyzer.analyzeMethodFlow(className, methodName);
+      // Perform flow analysis with streaming
+      const result = await this.analyzer.analyzeMethodFlow(className, methodName, stream);
       console.log('[FLOW] Analysis completed, result length:', result.length);
       
-      // Stream the result
-      stream.markdown(result);
+      // Note: Result is already streamed, so we don't need to stream it again
 
       // Add follow-up suggestions
       stream.markdown(`
@@ -244,11 +246,12 @@ Cache has been reset. Next analyses will be fresh.`);
    * Parse flow analysis request - simple space-separated format
    */
   private parseFlowRequest(prompt: string): { className?: string; methodName?: string } {
-    console.log('[PARSE] parseFlowRequest called with:', prompt);
+    console.log('[PARSE] parseFlowRequest called with:', JSON.stringify(prompt));
     
     // Remove command prefix and extra whitespace
-    const cleanPrompt = prompt.replace(/^@reqgen\s+flow\s+/i, '').trim();
-    console.log('[PARSE] cleanPrompt after removing prefix:', cleanPrompt);
+    // The prompt comes in without @reqgen prefix, so just remove "flow" part
+    const cleanPrompt = prompt.replace(/^flow\s+/i, '').trim();
+    console.log('[PARSE] cleanPrompt after removing prefix:', JSON.stringify(cleanPrompt));
     
     // Handle special commands
     if (cleanPrompt.startsWith('cache') || cleanPrompt.startsWith('model') || cleanPrompt === 'help' || cleanPrompt === '') {
@@ -259,6 +262,13 @@ Cache has been reset. Next analyses will be fresh.`);
     // Split by whitespace to get parts
     const parts = cleanPrompt.split(/\s+/);
     console.log('[PARSE] Split parts:', parts);
+    
+    // Handle "current" keyword with different patterns
+    if (parts.length === 1 && parts[0].toLowerCase() === 'current') {
+      // User typed just "@reqgen flow current" - need method name
+      console.log('[PARSE] Current keyword without method name detected');
+      return {}; // This will trigger the error message asking for method name
+    }
     
     // Need at least 2 parts: className methodName
     if (parts.length >= 2) {

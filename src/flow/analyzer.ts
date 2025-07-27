@@ -36,7 +36,8 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
   async analyzeMethod(
     className: string, 
     methodName: string, 
-    config: Partial<AnalysisConfig> = {}
+    config: Partial<AnalysisConfig> = {},
+    stream?: vscode.ChatResponseStream
   ): Promise<MethodAnalysis> {
     const finalConfig: AnalysisConfig = { ...ANALYSIS_CONFIG, ...config };
     
@@ -49,33 +50,22 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
     const startTime = Date.now();
     
     try {
-      // Try to find method in class hierarchy
-      const hierarchyResult = await this.findMethodInHierarchy(className, methodName);
+      // Get file info for the class - let LLM determine if method exists
+      console.log('[ANALYZER] Getting file info for class:', className);
+      const fileInfo = await this.getFileInfo(className);
       
-      if (!hierarchyResult) {
-        // Method not found in any class in hierarchy
-        throw new Error(`Method ${methodName} not found in ${className} or its super classes`);
-      }
-
-      // Get file info for the class that actually contains the method
-      const fileInfo = await this.getFileInfo(hierarchyResult.className);
-      
-      // Perform analysis using the correct class and file content
+      // Always perform analysis - let LLM handle method detection and suggestions
       const analysis = await this.performMethodAnalysis(
-        hierarchyResult.className, // Use the class where method was actually found
+        className,
         methodName, 
         fileInfo, 
-        finalConfig
+        finalConfig,
+        stream
       );
 
-      // Cache the result using original className for consistency
+      // Cache the result
       analysis.contentHash = generateContentHash(fileInfo.content);
       analysis.analysisTimestamp = startTime;
-      
-      // Add inheritance info to the analysis
-      if (hierarchyResult.className !== className) {
-        analysis.inheritedFrom = hierarchyResult.className;
-      }
       
       this.cache.set(className, methodName, analysis);
       return analysis;
@@ -105,6 +95,7 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
   async analyzeMethodFlow(
     className: string, 
     methodName: string,
+    stream?: vscode.ChatResponseStream,
     config: Partial<AnalysisConfig> = {}
   ): Promise<string> {
     console.log('[ANALYZER] analyzeMethodFlow called with:', className, methodName);
@@ -117,7 +108,7 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
     
     try {
       console.log('[ANALYZER] Running flow analysis');
-      const result = await this.runFlowAnalysis(session);
+      const result = await this.runFlowAnalysis(session, stream);
       console.log('[ANALYZER] Flow analysis completed, output length:', result.formattedOutput.length);
       return result.formattedOutput;
     } catch (error) {
@@ -249,8 +240,12 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
     className: string,
     methodName: string,
     fileInfo: FileInfo,
-    config: AnalysisConfig
+    config: AnalysisConfig,
+    stream?: vscode.ChatResponseStream
   ): Promise<MethodAnalysis> {
+    console.log('[ANALYZER] performMethodAnalysis called for:', className, methodName);
+    console.log('[ANALYZER] File info - language:', fileInfo.language, 'content length:', fileInfo.content.length);
+    
     // Build prompt for LLM analysis
     const prompt = buildMethodAnalysisPrompt(
       className,
@@ -258,10 +253,15 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
       fileInfo.content,
       fileInfo.language
     );
+    console.log('[ANALYZER] Built prompt, length:', prompt.length);
 
     // Get selected LLM model
+    console.log('[ANALYZER] Selecting language model...');
     const model = await this.selectLanguageModel();
+    console.log('[ANALYZER] Selected model:', this.getModelDisplayName(model));
+    
     const messages = [vscode.LanguageModelChatMessage.User(prompt)];
+    console.log('[ANALYZER] Sending request to model...');
     
     // Send request with timeout
     const response = await Promise.race([
@@ -271,14 +271,44 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
       )
     ]) as vscode.LanguageModelChatResponse;
 
-    // Collect response
+    console.log('[ANALYZER] Received response from model');
+
+    if (stream) {
+      stream.markdown(`✅ **Found method**: \`${className}.${methodName}()\`
+
+🤖 **AI Analysis in progress** (using ${this.getCurrentModelName()})...
+
+`);
+    }
+
+    // Collect response and stream it in real-time
     let responseText = '';
+    console.log('[ANALYZER] Starting to process response fragments...');
+    
     for await (const fragment of response.text) {
       responseText += fragment;
+      console.log('[ANALYZER] Received fragment, length:', fragment.length);
+      
+      // Stream the fragment to user in real-time
+      if (stream) {
+        stream.markdown(fragment);
+      }
+    }
+
+    console.log('[ANALYZER] Finished processing response, total length:', responseText.length);
+
+    if (stream) {
+      stream.markdown(`
+
+📊 **Analysis complete!** Processing results...
+
+`);
     }
 
     // Parse LLM response into structured data
+    console.log('[ANALYZER] Parsing LLM response...');
     const parsed = this.parseLLMResponse(responseText, className, methodName, fileInfo.language);
+    console.log('[ANALYZER] Parsed response, execution blocks:', parsed.executionBlocks.length);
 
     return {
       className,
@@ -388,56 +418,7 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
   }
 
   /**
-   * Find method in class hierarchy (including super classes)
-   */
-  private async findMethodInHierarchy(className: string, methodName: string): Promise<{ className: string; content: string } | null> {
-    try {
-      // First try the direct class
-      const directResult = await this.getFileInfo(className);
-      if (this.hasMethodInContent(directResult.content, methodName)) {
-        return { className, content: directResult.content };
-      }
-
-      // Extract super class from the file content
-      const superClass = this.extractSuperClass(directResult.content);
-      if (superClass) {
-        // Recursively search in super class
-        return await this.findMethodInHierarchy(superClass, methodName);
-      }
-
-      return null;
-    } catch (error) {
-      return null;
-    }
-  }
-
-  /**
-   * Check if method exists in file content
-   */
-  private hasMethodInContent(content: string, methodName: string): boolean {
-    // Look for method declarations (public, private, protected, package-private)
-    const methodPatterns = [
-      new RegExp(`\\b(public|private|protected|static|final|abstract|synchronized)\\s+.*\\s+${methodName}\\s*\\(`),
-      new RegExp(`\\s+${methodName}\\s*\\(`), // Package-private methods
-    ];
-    
-    return methodPatterns.some(pattern => pattern.test(content));
-  }
-
-  /**
-   * Extract super class name from Java file content
-   */
-  private extractSuperClass(content: string): string | null {
-    // Look for "extends SuperClassName"
-    const extendsMatch = content.match(/class\s+\w+\s+extends\s+(\w+)/);
-    if (extendsMatch) {
-      return extendsMatch[1];
-    }
-    return null;
-  }
-
-  /**
-   * Enhanced method analysis that checks inheritance hierarchy
+   * Build method call summary from parsed method calls
    */
   private buildMethodCallSummary(methodCalls: MethodCall[]) {
     return {
@@ -474,23 +455,33 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
   /**
    * Run complete flow analysis with call stack tracing
    */
-  private async runFlowAnalysis(session: AnalysisSession): Promise<FlowAnalysisResult> {
+  private async runFlowAnalysis(session: AnalysisSession, stream?: vscode.ChatResponseStream): Promise<FlowAnalysisResult> {
     const startTime = Date.now();
     const methodAnalyses: MethodAnalysis[] = [];
     
     try {
       // Start with root method
+      if (stream) {
+        stream.markdown(`## 📋 Analyzing: \`${session.rootMethod.className}.${session.rootMethod.methodName}()\`
+
+🔍 **Step 1**: Sending file to LLM for analysis...
+`);
+      }
+      
       const rootAnalysis = await this.analyzeMethod(
         session.rootMethod.className,
         session.rootMethod.methodName,
-        session.config
+        session.config,
+        stream
       );
       
       methodAnalyses.push(rootAnalysis);
       session.totalMethodsAnalyzed++;
 
-      // Process step-into method calls
-      await this.processStepIntoMethods(session, rootAnalysis, methodAnalyses);
+      // Process step-into method calls if method was found
+      if (rootAnalysis.analysisStatus === 'complete') {
+        await this.processStepIntoMethods(session, rootAnalysis, methodAnalyses);
+      }
 
       // Generate formatted output
       const formattedOutput = this.formatFlowAnalysis(methodAnalyses, session);
@@ -524,7 +515,7 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
   }
 
   /**
-   * Process methods that should be stepped into
+   * Process methods that should be stepped into (only if primary method was found)
    */
   private async processStepIntoMethods(
     session: AnalysisSession,
@@ -560,7 +551,9 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
         session.totalMethodsAnalyzed++;
 
         // Recursively process step-into methods
-        await this.processStepIntoMethods(session, methodAnalysis, methodAnalyses);
+        if (methodAnalysis.analysisStatus === 'complete') {
+          await this.processStepIntoMethods(session, methodAnalysis, methodAnalyses);
+        }
 
       } catch (error) {
         // Continue with other methods if one fails
