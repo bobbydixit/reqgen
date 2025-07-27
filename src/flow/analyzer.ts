@@ -20,7 +20,8 @@ import {
   LinearStepType,
   MethodAnalysis,
   MethodAnalysisCache,
-  MethodCall
+  MethodCall,
+  StepInDecision
 } from './types';
 
 /**
@@ -84,7 +85,7 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
         language: 'unknown',
         analysisStatus: 'error',
         executionBlocks: [],
-        methodCallSummary: { stepInto: [], external: [], notFound: [] },
+        methodCallSummary: { stepInto: [], objectLookup: [], external: [], notFound: [] },
         analysisTimestamp: startTime,
         contentHash: '',
         errorMessage: error instanceof Error ? error.message : 'Unknown error'
@@ -595,22 +596,37 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
    */
   private extractMethodCallsFromBlock(blockText: string, blockIndex: number): MethodCall[] {
     const calls: MethodCall[] = [];
-    const callPattern = /- \*\*Call\*\*: `(.+?)`\n.*?- \*\*Step Into\*\*: (.+?) \((.+?)\)/gs;
+    const callPattern = /- \*\*Call\*\*: `(.+?)`\n.*?- \*\*Classification\*\*: (.+?) \((.+?)\)/gs;
     let match;
     let callIndex = 0;
 
     while ((match = callPattern.exec(blockText)) !== null) {
-      const [, fullCall, stepInDecision, reasoning] = match;
+      const [, fullCall, classification, reasoning] = match;
       
       // Better parsing of method calls
       const parsedCall = this.parseMethodCall(fullCall);
       
       if (parsedCall) {
+        // Map classification to stepInDecision
+        let stepInDecision: StepInDecision;
+        const classificationLower = classification.toLowerCase().trim();
+        
+        if (classificationLower.includes('step into')) {
+          stepInDecision = 'stepInto';
+        } else if (classificationLower.includes('object lookup')) {
+          stepInDecision = 'objectLookup';
+        } else if (classificationLower.includes('external')) {
+          stepInDecision = 'external';
+        } else {
+          // Fallback for backward compatibility with old "Step Into: Yes/No" format
+          stepInDecision = classificationLower.includes('yes') ? 'stepInto' : 'external';
+        }
+        
         calls.push({
           className: parsedCall.className,
           methodName: parsedCall.methodName,
           parameters: parsedCall.parameters,
-          stepInDecision: stepInDecision.toLowerCase().includes('yes') ? 'stepInto' : 'external',
+          stepInDecision,
           reasoning: reasoning.trim(),
           expectedBehavior: 'To be analyzed',
           executionOrder: callIndex,
@@ -676,6 +692,7 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
    */
   private buildMethodCallSummary(methodCalls: MethodCall[]) {
     const stepInto: MethodCall[] = [];
+    const objectLookup: MethodCall[] = [];
     const external: MethodCall[] = [];
     const notFound: MethodCall[] = [];
 
@@ -683,6 +700,9 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
       switch (call.stepInDecision) {
         case 'stepInto':
           stepInto.push(call);
+          break;
+        case 'objectLookup':
+          objectLookup.push(call);
           break;
         case 'external':
           external.push(call);
@@ -693,7 +713,7 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
       }
     });
 
-    return { stepInto, external, notFound };
+    return { stepInto, objectLookup, external, notFound };
   }
 
   /**
@@ -1058,6 +1078,14 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
             stepType: 'methodCall'
           });
           // The inner method will be added when it gets analyzed recursively
+        } else if (methodCall.stepInDecision === 'objectLookup') {
+          this.linearFlow.steps.push({
+            stepNumber: ++currentStepNumber,
+            depth,
+            sourceMethod: methodKey,
+            description: `Data access: ${methodCall.className}.${methodCall.methodName}(${methodCall.parameters}) - ${methodCall.expectedBehavior}`,
+            stepType: 'methodCall'
+          });
         } else {
           this.linearFlow.steps.push({
             stepNumber: ++currentStepNumber,
@@ -1188,6 +1216,15 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
               stepType: 'methodReturn'
             });
           }
+        } else if (methodCall.stepInDecision === 'objectLookup') {
+          // Object lookup - just document as data access
+          this.linearFlow.steps.push({
+            stepNumber: ++currentStepNumber,
+            depth,
+            sourceMethod: methodKey,
+            description: `Data access: ${methodCall.className}.${methodCall.methodName}(${methodCall.parameters}) - ${methodCall.expectedBehavior}`,
+            stepType: 'methodCall'
+          });
         } else {
           // External method call - just document it
           this.linearFlow.steps.push({
@@ -1292,7 +1329,7 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
 
     console.log(`[ANALYZER] generateMethodExecutionRecursively: ${analysis.className}.${analysis.methodName}() at depth ${depth}`);
     console.log(`[ANALYZER] Analysis status: ${analysis.analysisStatus}, execution blocks: ${analysis.executionBlocks.length}`);
-    console.log(`[ANALYZER] Method calls summary - stepInto: ${analysis.methodCallSummary.stepInto.length}, external: ${analysis.methodCallSummary.external.length}`);
+    console.log(`[ANALYZER] Method calls summary - stepInto: ${analysis.methodCallSummary.stepInto.length}, objectLookup: ${analysis.methodCallSummary.objectLookup.length}, external: ${analysis.methodCallSummary.external.length}`);
 
     // Method starts
     output += `${indent}🔵 ${analysis.className}.${analysis.methodName}() starts\n`;
@@ -1363,8 +1400,11 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
             // Method not analyzed or failed
             output += `${indent}- ⚠️ Method analysis not available\n`;
           }
+        } else if (methodCall.stepInDecision === 'objectLookup') {
+          // Object lookup - simple data access, no recursion but show as data access
+          output += `${indent}🔍 Data access: ${methodCall.className}.${methodCall.methodName}() - ${methodCall.expectedBehavior}\n`;
         } else {
-          // External method call - no recursion
+          // External method call - framework/library, no recursion
           output += `${indent}📞 External call: ${methodCall.className}.${methodCall.methodName}(${methodCall.parameters}) - ${methodCall.expectedBehavior}\n`;
         }
       }
@@ -1406,8 +1446,9 @@ ${flowContent}
 - **Language**: ${analysis.language}
 - **Status**: ${analysis.analysisStatus}
 - **Execution Blocks**: ${analysis.executionBlocks.length}
-- **Method Calls Found**: ${analysis.methodCallSummary.stepInto.length + analysis.methodCallSummary.external.length}
+- **Method Calls Found**: ${analysis.methodCallSummary.stepInto.length + analysis.methodCallSummary.objectLookup.length + analysis.methodCallSummary.external.length}
   - **Step Into**: ${analysis.methodCallSummary.stepInto.length}
+  - **Object Lookup**: ${analysis.methodCallSummary.objectLookup.length}
   - **External**: ${analysis.methodCallSummary.external.length}
 
 ---
@@ -1524,7 +1565,7 @@ ${flowContent}
         methodCalls: [],
         nextBlocks: []
       }],
-      methodCallSummary: { stepInto: [], external: [], notFound: [] },
+      methodCallSummary: { stepInto: [], objectLookup: [], external: [], notFound: [] },
       analysisTimestamp: Date.now(),
       contentHash: '',
       errorMessage: reason

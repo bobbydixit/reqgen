@@ -42,10 +42,35 @@ Analyze the method execution flow with semantic blocks:
    - Conditional execution order
    - Method call dependencies
 
-3. **For method calls**, make step-in decisions:
-   - **Step Into**: Own application code (classes in this codebase)
-   - **Don't Step Into**: Framework code, utility libraries, external APIs
-   - **Mark as External**: Calls where implementation not found
+3. **For method calls**, classify into THREE categories:
+   
+   **STEP INTO - Business Logic Methods**:
+   - Application service classes (e.g., SomeManager, SomeService, SomeUtil)
+   - Business logic executors (e.g., SomeExecutor, SomeProcessor)
+   - Application-specific utility classes in the same package/codebase
+   - Methods that perform complex business operations
+   
+   **OBJECT LOOKUP - Simple Data Access**:
+   - Simple getter/setter methods (e.g., getPostPaymentJourneyInfo(), setUserId())
+   - Builder pattern methods (e.g., .builder(), .build())
+   - Simple data transformation methods
+   - Lombok-generated methods (getters, setters, builders)
+   - Parameter object method calls
+   - Model/DTO accessor methods
+   
+   **EXTERNAL - Framework/Library Methods**:
+   - Framework code (Spring, Hibernate, etc.)
+   - Standard library classes (String, List, Map, Collections, etc.)
+   - External service calls or APIs
+   - Third-party utility libraries
+   
+   **CLASSIFICATION EXAMPLES**:
+   - ✅ Step Into: finalProductManager.getPremiumResponse() (business logic)
+   - 🔍 Object Lookup: finalProductPriceFetcherRequest.getPostPaymentJourneyInfo() (getter method)
+   - ✅ Step Into: UserDetailsUtil.getProposalDetails() (business utility)
+   - ❌ External: Objects.nonNull() (standard library)
+   - ✅ Step Into: PACoverUtil.getPACoverDetails() (business logic)
+   - 🔍 Object Lookup: builder.build() (builder pattern)
    
    **IMPORTANT**: Be specific about step-in decisions to enable recursive analysis:
    - If a method appears to be part of the application logic, mark it "Step Into: Yes"
@@ -83,7 +108,7 @@ Use structured markdown with this exact format:
 **Method Calls**:
 {If any method calls in this block}
 - **Call**: \`ClassName.methodName()\`
-  - **Step Into**: [Yes/No] ([Reasoning])
+  - **Classification**: [Step Into|Object Lookup|External] ([Reasoning])
   - **Expected Behavior**: [What this method likely does]
 
 **IMPORTANT FORMAT NOTES**:
@@ -101,13 +126,17 @@ Use structured markdown with this exact format:
 [Continue with remaining blocks...]
 
 ### Method Call Summary:
-{List all method calls found with step-in decisions}
+{List all method calls found with classifications}
 
-#### Step Into (Own Code):
+#### Step Into (Business Logic):
 - \`ClassName.methodName()\` - [Brief description]
 - \`AnotherClass.anotherMethod()\` - [Brief description]
 
-#### External Calls (No Step-In):
+#### Object Lookup (Data Access):
+- \`requestObject.getProperty()\` - [Brief description]
+- \`builder.build()\` - [Brief description]
+
+#### External (Framework/Library):
 - \`frameworkClass.utilityMethod()\` - Framework utility
 - \`library.externalAPI()\` - External service call
 
@@ -167,12 +196,18 @@ Document as:
 - Variable c gets the final result
 
 **Step-In Strategy**:
-- **Step Into**: Classes that appear to be application code
-- **Don't Step Into**: 
-  - Standard library classes (String, List, Map, etc.)
+- **Step Into (Business Logic)**: 
+  - Classes ending in Manager, Service, Util, Executor, Processor
+  - Application-specific business logic classes
+  - Classes that perform complex operations or transformations
+- **Don't Step Into (Simple/External)**: 
+  - Standard library classes (String, List, Map, Objects, etc.)
   - Framework classes (Spring, Hibernate, etc.)
   - Utility libraries (Apache Commons, etc.)
   - External service calls
+  - Simple getter/setter methods on data objects
+  - Builder pattern methods (.builder(), .build())
+  - Lombok-generated methods
 
 **Method Detection**:
 - Look carefully through the entire class file

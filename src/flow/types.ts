@@ -35,9 +35,9 @@ export type ExecutionBlockType =
 export type AnalysisStatus = 'complete' | 'partial' | 'error' | 'external';
 
 /**
- * Step-in decision for method calls
+ * Step-in decision for method calls - now three-tier classification
  */
-export type StepInDecision = 'stepInto' | 'external' | 'notFound';
+export type StepInDecision = 'stepInto' | 'objectLookup' | 'external' | 'notFound';
 
 /**
  * Types of steps in linear execution flow
@@ -118,6 +118,7 @@ export interface MethodAnalysis {
   executionBlocks: ExecutionBlock[];
   methodCallSummary: {
     stepInto: MethodCall[];
+    objectLookup: MethodCall[];
     external: MethodCall[];
     notFound: MethodCall[];
   };

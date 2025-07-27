@@ -16,7 +16,8 @@ import {
     FlowAnalyzer,
     MethodAnalysis,
     MethodAnalysisCache,
-    MethodCall
+    MethodCall,
+    StepInDecision
 } from './types';
 
 /**
@@ -79,7 +80,7 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
         language: 'unknown',
         analysisStatus: 'error',
         executionBlocks: [],
-        methodCallSummary: { stepInto: [], external: [], notFound: [] },
+        methodCallSummary: { stepInto: [], objectLookup: [], external: [], notFound: [] },
         analysisTimestamp: startTime,
         contentHash: '',
         errorMessage: error instanceof Error ? error.message : 'Unknown error'
@@ -424,6 +425,7 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
    */
   private buildMethodCallSummary(methodCalls: MethodCall[]) {
     const stepInto: MethodCall[] = [];
+    const objectLookup: MethodCall[] = [];
     const external: MethodCall[] = [];
     const notFound: MethodCall[] = [];
 
@@ -431,6 +433,9 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
       switch (call.stepInDecision) {
         case 'stepInto':
           stepInto.push(call);
+          break;
+        case 'objectLookup':
+          objectLookup.push(call);
           break;
         case 'external':
           external.push(call);
@@ -441,7 +446,7 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
       }
     });
 
-    return { stepInto, external, notFound };
+    return { stepInto, objectLookup, external, notFound };
   }
 
   /**
@@ -750,7 +755,7 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
         methodCalls: [],
         nextBlocks: []
       }],
-      methodCallSummary: { stepInto: [], external: [], notFound: [] },
+      methodCallSummary: { stepInto: [], objectLookup: [], external: [], notFound: [] },
       analysisTimestamp: Date.now(),
       contentHash: '',
       errorMessage: reason
