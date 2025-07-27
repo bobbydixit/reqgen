@@ -51,36 +51,31 @@ CRITICAL INSTRUCTIONS:
 - Do not mention specific classes, methods, or technical architecture details
 - Write as if this is a specification for building the feature from scratch`;
 
-export const HELP_TEMPLATE = `# 🚀 RequirementsGen (@reqgen) Help
+// Legacy template - no longer used, flow analysis uses inline help
+export const HELP_TEMPLATE = `# 🚀 Flow Analysis Help
 
-## Commands
+## Command
 
-### Single Analysis
+### Flow Analysis (Linear Code Walkthrough)
 \`\`\`
-@reqgen analyze ClassName.methodName
-@reqgen analyze UserService.createUser
-@reqgen analyze PaymentProcessor.processPayment
-\`\`\`
-
-### Batch Analysis (Hour-long cycles)
-\`\`\`
-@reqgen batch analyze classes: UserService, PaymentProcessor, OrderManager
-@reqgen batch multiple AuthService, EmailService, NotificationHandler
+@reqgen flow ClassName.methodName
+@reqgen flow UserService.createUser
+@reqgen flow PaymentProcessor.processPayment
 \`\`\`
 
 ### What I Generate
-- 📋 **Detailed Requirements Documents** in proven PRD format
-- 🔍 **Deep Code Analysis** with inheritance chains
-- 📊 **Business Rule Validation** requirements  
-- 🔄 **State Management** specifications
-- 📈 **Integration Requirements** for system coordination
+-  **Linear Code Flow Analysis** like stepping through a debugger
+- � **Step-by-step execution walkthrough** showing method calls and logic flow
+- � **Call stack tracing** with conservative step-in strategy
+- � **Decision branch analysis** for complex conditional logic
 
 ### Powered By
-- 🤖 **GitHub Copilot** language models (GPT-4o, Claude Sonnet)
+- 🤖 **GitHub Copilot** language models (GPT-4o, Claude Sonnet)  
 - 📁 **VS Code Workspace** analysis
 - ⚡ **Real-time streaming** responses
+- 🧠 **Dynamic Programming** cache for performance
 
-Try: \`@reqgen analyze [YourClassName]\` to get started!`;
+Try: \`@reqgen flow [ClassName.methodName]\` to get started!`;
 
 export const BATCH_HEADER_TEMPLATE = `# 🏭 Batch Requirements Generation
 

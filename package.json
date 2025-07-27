@@ -1,8 +1,8 @@
 {
   "name": "requirements-generator",
   "displayName": "RequirementsGen (@reqgen)",
-  "description": "AI-powered requirements generator that analyzes Java code and creates detailed PRD documents using GitHub Copilot",
-  "version": "0.1.0",
+  "description": "AI-powered flow analysis that provides linear code walkthrough like stepping through a debugger using GitHub Copilot",
+  "version": "0.1.1",
   "license": "MIT",
   "author": "RequirementsGen Contributors",
   "publisher": "your-publisher-name",
@@ -45,7 +45,7 @@
     "commands": [
       {
         "command": "document-generator.analyzeFile",
-        "title": "Analyze File for Requirements"
+        "title": "Flow Analysis for Java File"
       }
     ]
   },

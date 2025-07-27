@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { analyzeJavaClass } from '../analysis/javaAnalyzer';
+import { analyzeClass } from '../analysis/codeAnalyzer';
 import { buildRequirementsPrompt } from './promptBuilder';
 
 export async function generateRequirements(
@@ -10,8 +10,8 @@ export async function generateRequirements(
   token: vscode.CancellationToken
 ): Promise<void> {
 
-  // 1. Find and analyze the Java class
-  const codeAnalysis = await analyzeJavaClass(className, methodName);
+  // 1. Find and analyze the class/symbol
+  const codeAnalysis = await analyzeClass(className, methodName);
   
   // 2. Generate requirements using the language model
   const requirementsPrompt = buildRequirementsPrompt({

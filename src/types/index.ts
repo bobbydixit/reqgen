@@ -1,5 +1,5 @@
-import * as vscode from 'vscode';
 
+// Legacy interfaces - kept for potential future use or existing code compatibility
 export interface AnalysisRequest {
   method?: string;
   className?: string;
@@ -18,14 +18,10 @@ export interface CodeAnalysis {
   inheritance?: string;
 }
 
-export interface ChatHandlers {
-  handleHelp: (stream: vscode.ChatResponseStream) => Promise<vscode.ChatResult>;
-  handleAnalyze: (request: AnalysisRequest, chatRequest: vscode.ChatRequest, stream: vscode.ChatResponseStream, token: vscode.CancellationToken) => Promise<vscode.ChatResult>;
-  handleBatch: (request: AnalysisRequest, chatRequest: vscode.ChatRequest, stream: vscode.ChatResponseStream, token: vscode.CancellationToken) => Promise<vscode.ChatResult>;
-}
-
 export interface RequirementsPromptOptions {
   codeAnalysis: string;
   className: string;
   methodName?: string;
 }
+
+// Note: Flow analysis uses its own types defined in src/flow/types.ts
