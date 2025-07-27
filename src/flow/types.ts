@@ -40,6 +40,43 @@ export type AnalysisStatus = 'complete' | 'partial' | 'error' | 'external';
 export type StepInDecision = 'stepInto' | 'external' | 'notFound';
 
 /**
+ * Types of steps in linear execution flow
+ */
+export type LinearStepType = 
+  | 'methodStart' 
+  | 'execution' 
+  | 'methodCall' 
+  | 'methodReturn' 
+  | 'conditional'
+  | 'methodEnd';
+
+/**
+ * A single step in the linear execution flow
+ */
+export interface LinearExecutionStep {
+  stepNumber: number;
+  depth: number; // indentation level (0 = root method, 1 = first inner method, etc.)
+  sourceMethod: string; // e.g., "ClassName.methodName"
+  description: string;
+  stepType: LinearStepType;
+  originalBlockId?: string; // reference to original ExecutionBlock
+  conditionalInfo?: {
+    condition: string;
+    dependsOnStep: number; // which step's result this depends on
+  };
+}
+
+/**
+ * Linear execution flow for sequential presentation
+ */
+export interface LinearExecutionFlow {
+  steps: LinearExecutionStep[];
+  methodReferences: Map<string, MethodAnalysis>; // for deduplication
+  totalSteps: number;
+  rootMethod: string;
+}
+
+/**
  * A method call within an execution block
  */
 export interface MethodCall {

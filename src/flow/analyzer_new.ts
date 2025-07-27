@@ -4,22 +4,19 @@ import { createMethodAnalysisCache, generateContentHash } from './cache';
 import { detectLanguage } from './languageDetector';
 import { ANALYSIS_CONFIG, buildMethodAnalysisPrompt } from './prompts';
 import {
-  AnalysisConfig,
-  AnalysisSession,
-  AnalysisStatus,
-  CacheStats,
-  CallStackEntry,
-  ExecutionBlock,
-  FileInfo,
-  FlowAnalysisError,
-  FlowAnalysisResult,
-  FlowAnalyzer,
-  LinearExecutionFlow,
-  LinearExecutionStep,
-  LinearStepType,
-  MethodAnalysis,
-  MethodAnalysisCache,
-  MethodCall
+    AnalysisConfig,
+    AnalysisSession,
+    AnalysisStatus,
+    CacheStats,
+    CallStackEntry,
+    ExecutionBlock,
+    FileInfo,
+    FlowAnalysisError,
+    FlowAnalysisResult,
+    FlowAnalyzer,
+    MethodAnalysis,
+    MethodAnalysisCache,
+    MethodCall
 } from './types';
 
 /**
@@ -29,7 +26,6 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
   private cache: MethodAnalysisCache;
   private sessions = new Map<string, AnalysisSession>();
   private selectedModel: vscode.LanguageModelChat | null = null;
-  private linearFlow: LinearExecutionFlow | null = null; // Track linear flow for current session
 
   constructor(config?: Partial<AnalysisConfig>) {
     this.cache = createMethodAnalysisCache();
@@ -316,24 +312,6 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
     const parsed = this.parseLLMResponse(responseText, className, methodName, fileInfo.language);
     console.log('[ANALYZER] Parsed response, execution blocks:', parsed.executionBlocks.length);
 
-    // Check if method was not found and LLM provided suggestions
-    if (parsed.analysisStatus === 'error' && this.isMethodNotFoundResponse(responseText)) {
-      console.log('[ANALYZER] Method not found, checking LLM suggestions...');
-      
-      const suggestedAnalysis = await this.followLLMSuggestions(
-        className,
-        methodName,
-        responseText,
-        fileInfo,
-        config,
-        stream
-      );
-      
-      if (suggestedAnalysis) {
-        return suggestedAnalysis;
-      }
-    }
-
     return {
       className,
       methodName,
@@ -356,32 +334,6 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
     methodName: string, 
     language: string
   ) {
-    // Check if LLM indicates method was not found
-    const methodNotFoundIndicators = [
-      'not found',
-      'does not exist',
-      'cannot be found',
-      'method not found',
-      '❌',
-      'Method Detection Result:\n❌',
-      'Similar Methods Found:'
-    ];
-    
-    const isMethodNotFound = methodNotFoundIndicators.some(indicator => 
-      responseText.toLowerCase().includes(indicator.toLowerCase())
-    );
-    
-    if (isMethodNotFound) {
-      console.log('[ANALYZER] LLM indicates method not found, will check parent classes');
-      
-      return {
-        executionBlocks: [],
-        methodCalls: [],
-        analysisStatus: 'error' as AnalysisStatus,
-        errorMessage: `Method ${methodName} not found in class ${className}`
-      };
-    }
-    
     // This is a simplified parser - in production you'd want more robust parsing
     const executionBlocks: ExecutionBlock[] = [];
     const methodCalls: MethodCall[] = [];
@@ -420,159 +372,6 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
   }
 
   /**
-   * Check if LLM response indicates method was not found
-   */
-  private isMethodNotFoundResponse(responseText: string): boolean {
-    const notFoundIndicators = [
-      'Method not found',
-      'not found in class',
-      '❌ **Method',
-      'Method Detection Result:\n❌',
-      'does not exist',
-      'could not be found'
-    ];
-
-    return notFoundIndicators.some(indicator => 
-      responseText.toLowerCase().includes(indicator.toLowerCase())
-    );
-  }
-
-  /**
-   * Follow LLM suggestions when method is not found
-   */
-  private async followLLMSuggestions(
-    originalClassName: string,
-    methodName: string,
-    llmResponse: string,
-    originalFileInfo: FileInfo,
-    config: AnalysisConfig,
-    stream?: vscode.ChatResponseStream
-  ): Promise<MethodAnalysis | null> {
-    console.log('[ANALYZER] Following LLM suggestions for method not found');
-
-    if (stream) {
-      stream.markdown(`\n### 🔍 **Following LLM Suggestions**\n\n`);
-    }
-
-    // Extract suggestions from LLM response
-    const suggestions = this.extractLLMSuggestions(llmResponse);
-    
-    if (suggestions.length === 0) {
-      console.log('[ANALYZER] No suggestions found in LLM response');
-      return null;
-    }
-
-    console.log('[ANALYZER] Found suggestions:', suggestions);
-
-    // Try each suggested class
-    for (const suggestion of suggestions) {
-      console.log(`[ANALYZER] Trying suggestion: ${suggestion.className}`);
-      
-      if (stream) {
-        stream.markdown(`📊 Checking \`${suggestion.className}\` for \`${methodName}()\`...\n\n`);
-      }
-
-      try {
-        const suggestedFileInfo = await this.getFileInfo(suggestion.className);
-        
-        // Analyze the method in the suggested class
-        const analysis = await this.performMethodAnalysis(
-          suggestion.className,
-          methodName,
-          suggestedFileInfo,
-          config,
-          stream
-        );
-
-        // If found in suggested class, return it with proper attribution
-        if (analysis.analysisStatus === 'complete') {
-          if (stream) {
-            stream.markdown(`✅ **Found** \`${methodName}()\` **in suggested class** \`${suggestion.className}\`\n\n`);
-            stream.markdown(`💡 **Reason**: ${suggestion.reason}\n\n`);
-          }
-          
-          // Update the analysis to show it was found in a different class
-          analysis.className = suggestion.className;
-          analysis.inheritedFrom = originalClassName; // Mark where we originally looked
-          return analysis;
-        }
-
-      } catch (error) {
-        console.log(`[ANALYZER] Could not find or analyze suggested class ${suggestion.className}:`, error);
-        
-        if (stream) {
-          stream.markdown(`⚠️ Could not access \`${suggestion.className}\`\n\n`);
-        }
-      }
-    }
-
-    if (stream) {
-      stream.markdown(`❌ **Method** \`${methodName}()\` **not found in any suggested classes**\n\n`);
-    }
-
-    return null;
-  }
-
-  /**
-   * Extract class suggestions from LLM response
-   */
-  private extractLLMSuggestions(llmResponse: string): Array<{ className: string; reason: string }> {
-    const suggestions: Array<{ className: string; reason: string }> = [];
-
-    try {
-      // Look for "Check Parent Classes" section
-      const parentClassPattern = /\*\*Extends\*\*:\s*`([^`]+)`\s*-\s*([^\n]+)/g;
-      let match;
-      
-      while ((match = parentClassPattern.exec(llmResponse)) !== null) {
-        const [, className, reason] = match;
-        suggestions.push({
-          className: className.trim(),
-          reason: `Parent class: ${reason.trim()}`
-        });
-      }
-
-      // Look for "Alternative Classes to Check" section
-      const alternativePattern = /`([A-Za-z_][A-Za-z0-9_]*)`\s*-\s*([^\n]+)/g;
-      const alternativeSection = llmResponse.match(/#### Alternative Classes to Check:(.*?)(?=####|$)/s);
-      
-      if (alternativeSection) {
-        const sectionText = alternativeSection[1];
-        let altMatch;
-        
-        while ((altMatch = alternativePattern.exec(sectionText)) !== null) {
-          const [, className, reason] = altMatch;
-          // Don't duplicate if already added from parent classes
-          if (!suggestions.some(s => s.className === className.trim())) {
-            suggestions.push({
-              className: className.trim(),
-              reason: `Alternative class: ${reason.trim()}`
-            });
-          }
-        }
-      }
-
-      // Look for "Implements" interfaces
-      const implementsPattern = /\*\*Implements\*\*:\s*`([^`]+)`\s*-\s*([^\n]+)/g;
-      while ((match = implementsPattern.exec(llmResponse)) !== null) {
-        const [, className, reason] = match;
-        if (!suggestions.some(s => s.className === className.trim())) {
-          suggestions.push({
-            className: className.trim(),
-            reason: `Interface: ${reason.trim()}`
-          });
-        }
-      }
-
-    } catch (error) {
-      console.error('[ANALYZER] Error extracting LLM suggestions:', error);
-    }
-
-    console.log('[ANALYZER] Extracted suggestions:', suggestions);
-    return suggestions;
-  }
-
-  /**
    * Extract block text from response
    */
   private extractBlockText(responseText: string, startIndex: number): string {
@@ -594,80 +393,30 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
    */
   private extractMethodCallsFromBlock(blockText: string, blockIndex: number): MethodCall[] {
     const calls: MethodCall[] = [];
-    const callPattern = /- \*\*Call\*\*: `(.+?)`\n.*?- \*\*Step Into\*\*: (.+?) \((.+?)\)/gs;
+    const callPattern = /- \*\*Call\*\*: `(.+?)`\n.*?- \*\*Step Into\*\*: (.+?) \((.+?)\)/g;
     let match;
     let callIndex = 0;
 
     while ((match = callPattern.exec(blockText)) !== null) {
       const [, fullCall, stepInDecision, reasoning] = match;
-      
-      // Better parsing of method calls
-      const parsedCall = this.parseMethodCall(fullCall);
-      
-      if (parsedCall) {
-        calls.push({
-          className: parsedCall.className,
-          methodName: parsedCall.methodName,
-          parameters: parsedCall.parameters,
-          stepInDecision: stepInDecision.toLowerCase().includes('yes') ? 'stepInto' : 'external',
-          reasoning: reasoning.trim(),
-          expectedBehavior: 'To be analyzed',
-          executionOrder: callIndex,
-          conditionalExecution: undefined
-        });
+      const [className, methodCall] = fullCall.split('.', 2);
+      const methodName = methodCall ? methodCall.replace(/\(\)$/, '') : fullCall;
 
-        callIndex++;
-      }
+      calls.push({
+        className: className || 'Unknown',
+        methodName,
+        parameters: '',
+        stepInDecision: stepInDecision.toLowerCase().includes('yes') ? 'stepInto' : 'external',
+        reasoning: reasoning.trim(),
+        expectedBehavior: 'To be analyzed',
+        executionOrder: callIndex,
+        conditionalExecution: undefined
+      });
+
+      callIndex++;
     }
 
     return calls;
-  }
-
-  /**
-   * Parse a method call string into components
-   */
-  private parseMethodCall(fullCall: string): { className: string; methodName: string; parameters: string } | null {
-    console.log('[ANALYZER] Parsing method call:', fullCall);
-    
-    // Remove backticks if present
-    let cleanCall = fullCall.replace(/`/g, '').trim();
-    
-    // Handle different patterns:
-    // 1. ClassName.methodName()
-    // 2. ClassName.methodName(param1, param2)
-    // 3. object.methodName()
-    // 4. methodName() (standalone function)
-    
-    // Pattern for ClassName.methodName(parameters)
-    const classMethodPattern = /^([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*$/;
-    const match = cleanCall.match(classMethodPattern);
-    
-    if (match) {
-      const [, className, methodName, parameters] = match;
-      console.log('[ANALYZER] Parsed as class.method:', { className, methodName, parameters });
-      return {
-        className: className.trim(),
-        methodName: methodName.trim(),
-        parameters: parameters.trim()
-      };
-    }
-    
-    // Pattern for standalone methodName(parameters)
-    const standalonePattern = /^([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*$/;
-    const standaloneMatch = cleanCall.match(standalonePattern);
-    
-    if (standaloneMatch) {
-      const [, methodName, parameters] = standaloneMatch;
-      console.log('[ANALYZER] Parsed as standalone method:', { methodName, parameters });
-      return {
-        className: 'Unknown',
-        methodName: methodName.trim(),
-        parameters: parameters.trim()
-      };
-    }
-    
-    console.warn('[ANALYZER] Could not parse method call:', fullCall);
-    return null;
   }
 
   /**
@@ -728,9 +477,6 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
     const startTime = Date.now();
     
     try {
-      // Initialize linear flow for this session
-      this.initializeLinearFlow(session.rootMethod.className, session.rootMethod.methodName);
-      
       // Analyze the root method with recursive processing
       const rootAnalysis = await this.analyzeMethodRecursively(
         session.rootMethod.className,
@@ -740,23 +486,7 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
         0 // Initial depth
       );
 
-      // Build linear execution flow from all the analyzed methods
-      if (this.linearFlow && rootAnalysis.analysisStatus === 'complete') {
-        console.log('[ANALYZER] Building linear execution flow...');
-        this.buildLinearExecutionFlow(rootAnalysis, 0);
-        
-        if (stream) {
-          stream.markdown(`\n\n---\n\n`);
-          stream.markdown('# 🔄 **Sequential Execution Flow**\n\n');
-          stream.markdown('*This shows the complete execution as if all methods were written sequentially in one giant method.*\n\n');
-          
-          // Stream the linear execution text in real-time
-          const linearText = this.generateLinearExecutionText();
-          stream.markdown(linearText);
-        }
-      }
-
-      // Format the complete output with linear flow
+      // Format the complete output
       const formattedOutput = await this.formatRecursiveAnalysis(session, rootAnalysis);
 
       const result: FlowAnalysisResult = {
@@ -804,8 +534,6 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
   ): Promise<MethodAnalysis> {
     const methodKey = `${className}#${methodName}`;
     
-    console.log(`[ANALYZER] Starting recursive analysis: ${methodKey} at depth ${depth}`);
-    
     // Check depth limits
     if (depth >= session.config.maxCallStackDepth) {
       console.log(`[ANALYZER] Reached max depth ${session.config.maxCallStackDepth} for ${methodKey}`);
@@ -846,17 +574,6 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
       return this.createPlaceholderAnalysis(className, methodName, 'partial', 'Maximum method count reached');
     }
 
-    // Validate class and method names
-    if (!this.isValidIdentifier(className) || !this.isValidIdentifier(methodName)) {
-      console.warn(`[ANALYZER] Invalid identifiers: className="${className}", methodName="${methodName}"`);
-      
-      if (stream) {
-        stream.markdown(`❌ **Invalid method reference**: \`${className}.${methodName}()\`\n\n`);
-      }
-      
-      return this.createPlaceholderAnalysis(className, methodName, 'error', 'Invalid class or method name');
-    }
-
     // Mark as being analyzed
     session.analyzedMethods.add(methodKey);
     session.totalMethodsAnalyzed++;
@@ -885,28 +602,10 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
 
       return analysis;
 
-    } catch (error) {
-      console.error(`[ANALYZER] Error in recursive analysis for ${methodKey}:`, error);
-      
-      if (stream) {
-        stream.markdown(`❌ **Error analyzing** \`${className}.${methodName}()\`: ${error instanceof Error ? error.message : 'Unknown error'}\n\n`);
-      }
-      
-      return this.createPlaceholderAnalysis(className, methodName, 'error', error instanceof Error ? error.message : 'Unknown error');
-      
     } finally {
       // Clean up call stack
       session.callStack.pop();
     }
-  }
-
-  /**
-   * Check if a string is a valid identifier
-   */
-  private isValidIdentifier(identifier: string): boolean {
-    // Allow letters, numbers, underscores, but not starting with number
-    // Also reject overly long or suspicious strings
-    return /^[A-Za-z_][A-Za-z0-9_]*$/.test(identifier) && identifier.length < 100;
   }
 
   /**
@@ -922,7 +621,6 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
     const stepIntoMethods = analysis.methodCallSummary.stepInto;
 
     if (stepIntoMethods.length === 0) {
-      console.log('[ANALYZER] No step-into methods found');
       return;
     }
 
@@ -930,12 +628,8 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
       stream.markdown(`\n### 🔍 **Analyzing Inner Method Calls** (${stepIntoMethods.length} methods)\n\n`);
     }
 
-    console.log(`[ANALYZER] Processing ${stepIntoMethods.length} step-into methods at depth ${depth}`);
-
     // Analyze each method call recursively
     for (const methodCall of stepIntoMethods) {
-      console.log(`[ANALYZER] Processing method call: ${methodCall.className}.${methodCall.methodName}`);
-      
       if (stream) {
         stream.markdown(`📊 Analyzing \`${methodCall.className}.${methodCall.methodName}()\`...\n\n`);
       }
@@ -952,183 +646,25 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
         // Integrate the inner analysis into the execution blocks
         this.integrateInnerAnalysis(analysis, methodCall, innerAnalysis);
 
-        if (stream) {
-          if (innerAnalysis.analysisStatus === 'complete') {
-            stream.markdown(`✅ Completed analysis of \`${methodCall.className}.${methodCall.methodName}()\`\n\n`);
-          } else {
-            stream.markdown(`⚠️ Partial analysis of \`${methodCall.className}.${methodCall.methodName}()\` (${innerAnalysis.analysisStatus})\n\n`);
-          }
-        }
-
       } catch (error) {
         console.error(`[ANALYZER] Error analyzing ${methodCall.className}.${methodCall.methodName}:`, error);
         
         if (stream) {
           stream.markdown(`❌ Error analyzing \`${methodCall.className}.${methodCall.methodName}()\`: ${error instanceof Error ? error.message : 'Unknown error'}\n\n`);
         }
-        
-        // Create a placeholder analysis for the failed method
-        const placeholderAnalysis = this.createPlaceholderAnalysis(
-          methodCall.className,
-          methodCall.methodName,
-          'error',
-          error instanceof Error ? error.message : 'Unknown error'
-        );
-        
-        this.integrateInnerAnalysis(analysis, methodCall, placeholderAnalysis);
       }
     }
-    
-    console.log(`[ANALYZER] Completed processing ${stepIntoMethods.length} methods at depth ${depth}`);
   }
 
   /**
-   * Initialize linear execution flow for a session
-   */
-  private initializeLinearFlow(rootClassName: string, rootMethodName: string): void {
-    this.linearFlow = {
-      steps: [],
-      methodReferences: new Map<string, MethodAnalysis>(),
-      totalSteps: 0,
-      rootMethod: `${rootClassName}.${rootMethodName}`
-    };
-  }
-
-  /**
-   * Build linear execution flow from recursive analysis
-   */
-  private buildLinearExecutionFlow(
-    analysis: MethodAnalysis,
-    depth: number = 0,
-    parentStepNumber?: number
-  ): number {
-    if (!this.linearFlow) {
-      throw new Error('Linear flow not initialized');
-    }
-
-    const methodKey = `${analysis.className}.${analysis.methodName}`;
-    
-    // Check if we've already processed this exact method analysis
-    if (this.linearFlow.methodReferences.has(methodKey)) {
-      // Reuse cached analysis but create new steps with different numbers
-      const cachedAnalysis = this.linearFlow.methodReferences.get(methodKey)!;
-      return this.insertMethodSteps(cachedAnalysis, depth, parentStepNumber);
-    }
-
-    // Store the analysis for future reuse
-    this.linearFlow.methodReferences.set(methodKey, analysis);
-    
-    return this.insertMethodSteps(analysis, depth, parentStepNumber);
-  }
-
-  /**
-   * Insert method steps into linear flow
-   */
-  private insertMethodSteps(
-    analysis: MethodAnalysis,
-    depth: number,
-    parentStepNumber?: number
-  ): number {
-    if (!this.linearFlow) {
-      throw new Error('Linear flow not initialized');
-    }
-
-    const methodKey = `${analysis.className}.${analysis.methodName}`;
-    let currentStepNumber = this.linearFlow.totalSteps;
-
-    // Add method start step
-    this.linearFlow.steps.push({
-      stepNumber: ++currentStepNumber,
-      depth,
-      sourceMethod: methodKey,
-      description: `${analysis.className}.${analysis.methodName}() starts`,
-      stepType: 'methodStart'
-    });
-
-    // Process each execution block
-    for (const block of analysis.executionBlocks) {
-      // Add execution step for the block
-      this.linearFlow.steps.push({
-        stepNumber: ++currentStepNumber,
-        depth,
-        sourceMethod: methodKey,
-        description: block.description,
-        stepType: 'execution',
-        originalBlockId: block.blockId
-      });
-
-      // Process method calls within this block
-      for (const methodCall of block.methodCalls) {
-        if (methodCall.stepInDecision === 'stepInto') {
-          // Add method call step
-          const callStepNumber = ++currentStepNumber;
-          this.linearFlow.steps.push({
-            stepNumber: callStepNumber,
-            depth,
-            sourceMethod: methodKey,
-            description: `Call ${methodCall.className}.${methodCall.methodName}(${methodCall.parameters})`,
-            stepType: 'methodCall'
-          });
-
-          // Check if we have the inner method analysis
-          const innerMethodKey = `${methodCall.className}.${methodCall.methodName}`;
-          const innerAnalysis = this.linearFlow.methodReferences.get(innerMethodKey);
-          
-          if (innerAnalysis && innerAnalysis.analysisStatus === 'complete') {
-            // Recursively insert inner method steps
-            const lastInnerStep = this.insertMethodSteps(innerAnalysis, depth + 1, callStepNumber);
-            currentStepNumber = lastInnerStep;
-
-            // Add method return step
-            this.linearFlow.steps.push({
-              stepNumber: ++currentStepNumber,
-              depth,
-              sourceMethod: methodKey,
-              description: `${methodCall.className}.${methodCall.methodName}() returns: ${methodCall.expectedBehavior}`,
-              stepType: 'methodReturn'
-            });
-          }
-        } else {
-          // External method call - just document it
-          this.linearFlow.steps.push({
-            stepNumber: ++currentStepNumber,
-            depth,
-            sourceMethod: methodKey,
-            description: `External call: ${methodCall.className}.${methodCall.methodName}(${methodCall.parameters}) - ${methodCall.expectedBehavior}`,
-            stepType: 'methodCall'
-          });
-        }
-      }
-    }
-
-    // Add method end step
-    this.linearFlow.steps.push({
-      stepNumber: ++currentStepNumber,
-      depth,
-      sourceMethod: methodKey,
-      description: `${analysis.className}.${analysis.methodName}() completes`,
-      stepType: 'methodEnd'
-    });
-
-    this.linearFlow.totalSteps = currentStepNumber;
-    return currentStepNumber;
-  }
-
-  /**
-   * Replace the old integration logic with linear flow building
+   * Integrate inner method analysis into the main execution flow
    */
   private integrateInnerAnalysis(
     mainAnalysis: MethodAnalysis,
     methodCall: MethodCall,
     innerAnalysis: MethodAnalysis
   ): void {
-    // Store inner analysis for linear flow building
-    if (this.linearFlow) {
-      const innerMethodKey = `${innerAnalysis.className}.${innerAnalysis.methodName}`;
-      this.linearFlow.methodReferences.set(innerMethodKey, innerAnalysis);
-    }
-
-    // Update the method call with better expected behavior (keep this for compatibility)
+    // Find the execution block containing this method call
     for (const block of mainAnalysis.executionBlocks) {
       const relevantCall = block.methodCalls.find(call => 
         call.className === methodCall.className && 
@@ -1136,55 +672,16 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
       );
 
       if (relevantCall) {
-        relevantCall.expectedBehavior = this.extractExpectedBehavior(innerAnalysis);
+        // Enhance the execution flow with inner method details
+        if (innerAnalysis.executionBlocks.length > 0) {
+          const innerSummary = this.summarizeInnerExecution(innerAnalysis);
+          block.executionFlow += `\n\n**📋 Inner Execution for \`${methodCall.className}.${methodCall.methodName}()\`:**\n${innerSummary}`;
+          
+          // Update the method call with better expected behavior
+          relevantCall.expectedBehavior = this.extractExpectedBehavior(innerAnalysis);
+        }
         break;
       }
-    }
-  }
-
-  /**
-   * Generate linear execution text for LLM processing
-   */
-  private generateLinearExecutionText(): string {
-    if (!this.linearFlow) {
-      return 'No linear flow available';
-    }
-
-    let output = `# Sequential Execution Flow\n\n`;
-    output += `**Root Method:** ${this.linearFlow.rootMethod}\n`;
-    output += `**Total Steps:** ${this.linearFlow.totalSteps}\n\n`;
-    output += `## Step-by-Step Execution:\n\n`;
-
-    for (const step of this.linearFlow.steps) {
-      const indent = '  '.repeat(step.depth);
-      const stepIcon = this.getStepIcon(step.stepType);
-      
-      output += `${step.stepNumber}. ${indent}${stepIcon} ${step.description}\n`;
-      
-      if (step.conditionalInfo) {
-        output += `${indent}   └─ *Condition: ${step.conditionalInfo.condition} (depends on step ${step.conditionalInfo.dependsOnStep})*\n`;
-      }
-    }
-
-    output += `\n## Summary\n`;
-    output += `This represents the complete execution flow as if all methods were written sequentially in one giant method.\n`;
-    output += `Each step shows exactly what happens in execution order, with proper nesting to show method call hierarchy.\n`;
-
-    return output;
-  }
-
-  /**
-   * Get icon for step type
-   */
-  private getStepIcon(stepType: LinearStepType): string {
-    switch (stepType) {
-      case 'methodStart': return '🔵';
-      case 'execution': return '⚡';
-      case 'methodCall': return '📞';
-      case 'methodReturn': return '↩️';
-      case 'conditional': return '❓';
-      case 'methodEnd': return '🔴';
-      default: return '•';
     }
   }
 
@@ -1306,14 +803,7 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
    */
   private formatMethodAnalysis(analysis: MethodAnalysis, depth: number): string {
     const indent = '  '.repeat(depth);
-    
-    // Show inheritance information
-    let methodTitle = `${analysis.className}.${analysis.methodName}()`;
-    if (analysis.inheritedFrom) {
-      methodTitle = `${analysis.className}.${analysis.methodName}() (inherited from ${analysis.inheritedFrom})`;
-    }
-    
-    let output = `${indent}## 📋 Method: \`${methodTitle}\`\n\n`;
+    let output = `${indent}## 📋 Method: \`${analysis.className}.${analysis.methodName}()\`\n\n`;
 
     if (analysis.analysisStatus !== 'complete') {
       output += `${indent}⚠️ **Status**: ${analysis.analysisStatus}`;
@@ -1322,11 +812,6 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
       }
       output += '\n\n';
       return output;
-    }
-
-    // Add inheritance notice
-    if (analysis.inheritedFrom) {
-      output += `${indent}🧬 **Inheritance**: Method found in parent class \`${analysis.inheritedFrom}\`\n\n`;
     }
 
     // Add execution blocks
@@ -1363,24 +848,6 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
    */
   clearCache(): void {
     this.cache.clear();
-  }
-
-  /**
-   * Get the linear execution text for LLM processing
-   * This is the key method for your use case!
-   */
-  getLinearExecutionText(): string {
-    if (!this.linearFlow) {
-      return 'No analysis performed yet. Please run analyzeMethodFlow() first.';
-    }
-    return this.generateLinearExecutionText();
-  }
-
-  /**
-   * Get the linear execution flow data structure
-   */
-  getLinearExecutionFlow(): LinearExecutionFlow | null {
-    return this.linearFlow;
   }
 }
 

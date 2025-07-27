@@ -39,6 +39,11 @@ Analyze the method execution flow with semantic blocks:
    - **Step Into**: Own application code (classes in this codebase)
    - **Don't Step Into**: Framework code, utility libraries, external APIs
    - **Mark as External**: Calls where implementation not found
+   
+   **IMPORTANT**: Be specific about step-in decisions to enable recursive analysis:
+   - If a method appears to be part of the application logic, mark it "Step Into: Yes"
+   - Include clear reasoning for each decision
+   - For "Step Into" methods, they will be analyzed recursively and integrated into this flow
 
 STEP 3 - IF METHOD NOT FOUND:
 Provide helpful suggestions:
@@ -70,9 +75,20 @@ Use structured markdown with this exact format:
 
 **Method Calls**:
 {If any method calls in this block}
-- **Call**: \`className.methodName()\`
+- **Call**: \`ClassName.methodName()\`
   - **Step Into**: [Yes/No] ([Reasoning])
   - **Expected Behavior**: [What this method likely does]
+
+**IMPORTANT FORMAT NOTES**:
+- Use EXACT format: \`ClassName.methodName()\` (no parameters in the method name)
+- For static methods: \`ClassName.staticMethod()\`
+- For instance methods: \`objectName.methodName()\` or \`ClassName.methodName()\`
+- Do NOT include parameter values in the method name
+- Examples:
+  ✅ CORRECT: \`UserService.validateUser()\`
+  ❌ WRONG: \`UserService.validateUser(userId, email)\`
+  ✅ CORRECT: \`dataProcessor.processRecords()\`
+  ❌ WRONG: \`dataProcessor.processRecords(records, config).processRecords()\`
 
 #### Block 2: [Next Block Description]
 [Continue with remaining blocks...]
@@ -159,9 +175,9 @@ export const buildMethodAnalysisPrompt = (
 
 // Configuration for analysis limits
 export const ANALYSIS_CONFIG = {
-  maxCallStackDepth: 8,
-  maxTotalMethods: 30,
-  maxAnalysisTimeMs: 45000,
+  maxCallStackDepth: 5,     // Reduced for better performance with recursive analysis
+  maxTotalMethods: 15,      // Reduced to prevent overwhelming output
+  maxAnalysisTimeMs: 60000, // Increased for recursive processing
   stepIntoStrategy: 'conservative' as const,
   enableCaching: true,
   cacheExpiryMs: 300000, // 5 minutes
