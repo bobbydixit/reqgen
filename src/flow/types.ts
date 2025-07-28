@@ -198,6 +198,11 @@ export interface FlowAnalyzer {
   getCacheStats(): CacheStats;
   resetModelSelection(): void;
   getCurrentModelName(): string;
+  
+  // Debug streaming controls
+  enableDebugStreaming(): void;
+  disableDebugStreaming(): void;
+  isDebugStreamingEnabled(): boolean;
 }
 
 /**

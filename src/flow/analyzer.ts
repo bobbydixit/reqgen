@@ -4,6 +4,7 @@ import * as vscode from 'vscode';
 import { findClassOrSymbol, readFileContent } from '../analysis/workspaceSearch';
 import { createMethodAnalysisCache, generateContentHash } from './cache';
 import { detectLanguage } from './languageDetector';
+import { PersistentAnalysisCache } from './persistentCache';
 import { ANALYSIS_CONFIG, buildMethodAnalysisPrompt } from './prompts';
 import {
   AnalysisConfig,
@@ -29,12 +30,48 @@ import {
  */
 export class CodeFlowAnalyzer implements FlowAnalyzer {
   private cache: MethodAnalysisCache;
+  private persistentCache: PersistentAnalysisCache | null = null;
   private sessions = new Map<string, AnalysisSession>();
   private selectedModel: vscode.LanguageModelChat | null = null;
   private linearFlow: LinearExecutionFlow | null = null; // Track linear flow for current session
+  private debugStreaming: boolean = true; // Flag to control detailed streaming output
 
   constructor(config?: Partial<AnalysisConfig>) {
     this.cache = createMethodAnalysisCache();
+    
+    // Initialize persistent cache if we're in a workspace
+    try {
+      const workspaceFolders = vscode.workspace.workspaceFolders;
+      if (workspaceFolders && workspaceFolders.length > 0) {
+        this.persistentCache = new PersistentAnalysisCache(workspaceFolders[0].uri.fsPath);
+        console.log('[ANALYZER] Persistent cache initialized');
+      } else {
+        console.log('[ANALYZER] No workspace found, persistent cache disabled');
+      }
+    } catch (error) {
+      console.warn('[ANALYZER] Error initializing persistent cache:', error);
+    }
+  }
+
+  /**
+   * Enable detailed streaming output for debugging
+   */
+  enableDebugStreaming(): void {
+    this.debugStreaming = true;
+  }
+
+  /**
+   * Disable detailed streaming output (default)
+   */
+  disableDebugStreaming(): void {
+    this.debugStreaming = false;
+  }
+
+  /**
+   * Check if debug streaming is enabled
+   */
+  isDebugStreamingEnabled(): boolean {
+    return this.debugStreaming;
   }
 
   /**
@@ -49,9 +86,10 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
   ): Promise<MethodAnalysis> {
     const finalConfig: AnalysisConfig = { ...ANALYSIS_CONFIG, ...config };
     
-    // Check cache first (DP memoization)
+    // Check in-memory cache first (DP memoization)
     const cached = this.cache.get(className, methodName);
     if (cached) {
+      console.log('[ANALYZER] In-memory cache hit for:', className, methodName);
       return cached.analysis;
     }
 
@@ -62,6 +100,19 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
       console.log('[ANALYZER] Getting file info for class:', className);
       const fileInfo = await this.getFileInfo(className);
       
+      // Check persistent cache if available
+      if (this.persistentCache && this.selectedModel) {
+        const modelName = this.getModelDisplayName(this.selectedModel);
+        const persistentCached = this.persistentCache.get(className, methodName, fileInfo.content, modelName);
+        
+        if (persistentCached) {
+          console.log('[ANALYZER] Persistent cache hit for:', className, methodName);
+          // Store in in-memory cache for this session
+          this.cache.set(className, methodName, persistentCached);
+          return persistentCached;
+        }
+      }
+      
       // Always perform analysis - let LLM handle method detection and suggestions
       const analysis = await this.performMethodAnalysis(
         className,
@@ -71,11 +122,18 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
         stream
       );
 
-      // Cache the result
+      // Cache the result in both caches
       analysis.contentHash = generateContentHash(fileInfo.content);
       analysis.analysisTimestamp = startTime;
       
       this.cache.set(className, methodName, analysis);
+      
+      // Store in persistent cache if available and analysis was successful
+      if (this.persistentCache && this.selectedModel && analysis.analysisStatus === 'complete') {
+        const modelName = this.getModelDisplayName(this.selectedModel);
+        this.persistentCache.set(className, methodName, analysis, fileInfo.content, fileInfo.filePath, modelName);
+      }
+      
       return analysis;
 
     } catch (error) {
@@ -91,7 +149,7 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
         errorMessage: error instanceof Error ? error.message : 'Unknown error'
       };
 
-      // Cache error result to avoid repeated failures
+      // Cache error result to avoid repeated failures (in-memory only)
       this.cache.set(className, methodName, errorAnalysis);
       return errorAnalysis;
     }
@@ -107,6 +165,16 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
     config: Partial<AnalysisConfig> = {}
   ): Promise<string> {
     console.log('[ANALYZER] analyzeMethodFlow called with:', className, methodName);
+    
+    // Show initial progress
+    if (stream) {
+      if (this.debugStreaming) {
+        stream.markdown(`🔍 **Starting Flow Analysis**: \`${className}.${methodName}()\`\n\n`);
+        stream.markdown(`📋 **Debug Mode**: Detailed streaming enabled\n\n`);
+      } else {
+        stream.markdown(`🔍 **Analyzing**: \`${className}.${methodName}()\`\n\n`);
+      }
+    }
     
     const sessionId = `flow-${Date.now()}`;
     console.log('[ANALYZER] Created session ID:', sessionId);
@@ -295,17 +363,21 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
     
     for await (const fragment of response.text) {
       responseText += fragment;
-      console.log('[ANALYZER] Received fragment, length:', fragment.length);
+      if (this.debugStreaming) {
+        console.log('[ANALYZER] Received fragment, length:', fragment.length);
+      }
       
-      // Stream the fragment to user in real-time
-      if (stream) {
+      // Stream the fragment to user in real-time only if debug streaming is enabled
+      if (stream && this.debugStreaming) {
         stream.markdown(fragment);
       }
     }
 
     console.log('[ANALYZER] Finished processing response, total length:', responseText.length);
 
-    if (stream) {
+    if (stream && !this.debugStreaming) {
+      stream.markdown('✅ **Analysis complete!** Processing results...\n\n');
+    } else if (stream) {
       stream.markdown(`
 
 📊 **Analysis complete!** Processing results...
@@ -832,7 +904,7 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
     if (depth >= session.config.maxCallStackDepth) {
       console.log(`[ANALYZER] Reached max depth ${session.config.maxCallStackDepth} for ${methodKey}`);
       
-      if (stream) {
+      if (stream && this.debugStreaming) {
         stream.markdown(`⚠️ **Depth limit reached** for \`${className}.${methodName}()\` at depth ${depth}\n\n`);
       }
       
@@ -844,7 +916,7 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
     if (session.analyzedMethods.has(methodKey)) {
       console.log(`[ANALYZER] Cycle detected for ${methodKey}`);
       
-      if (stream) {
+      if (stream && this.debugStreaming) {
         stream.markdown(`🔄 **Cycle detected** for \`${className}.${methodName}()\` - already analyzed\n\n`);
       }
       
@@ -861,7 +933,7 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
     if (session.totalMethodsAnalyzed >= session.config.maxTotalMethods) {
       console.log(`[ANALYZER] Reached max total methods ${session.config.maxTotalMethods}`);
       
-      if (stream) {
+      if (stream && this.debugStreaming) {
         stream.markdown(`⚠️ **Method limit reached** - analyzed ${session.totalMethodsAnalyzed} methods\n\n`);
       }
       
@@ -872,7 +944,7 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
     if (!this.isValidIdentifier(className) || !this.isValidIdentifier(methodName)) {
       console.warn(`[ANALYZER] Invalid identifiers: className="${className}", methodName="${methodName}"`);
       
-      if (stream) {
+      if (stream && this.debugStreaming) {
         stream.markdown(`❌ **Invalid method reference**: \`${className}.${methodName}()\`\n\n`);
       }
       
@@ -959,7 +1031,7 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
       return;
     }
 
-    if (stream) {
+    if (stream && this.debugStreaming) {
       stream.markdown(`\n### 🔍 **Analyzing Inner Method Calls** (${stepIntoMethods.length} methods)\n\n`);
     }
 
@@ -969,7 +1041,7 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
     for (const methodCall of stepIntoMethods) {
       console.log(`[ANALYZER] Processing method call: ${methodCall.className}.${methodCall.methodName}`);
       
-      if (stream) {
+      if (stream && this.debugStreaming) {
         stream.markdown(`📊 Analyzing \`${methodCall.className}.${methodCall.methodName}()\`...\n\n`);
       }
 
@@ -998,7 +1070,7 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
           // Integrate the inner analysis into the execution blocks
           this.integrateInnerAnalysis(analysis, methodCall, innerAnalysis);
 
-          if (stream) {
+          if (stream && this.debugStreaming) {
             if (innerAnalysis.analysisStatus === 'complete') {
               stream.markdown(`✅ Completed analysis of \`${methodCall.className}.${methodCall.methodName}()\`\n\n`);
             } else {
@@ -1009,7 +1081,7 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
         } catch (error) {
         console.error(`[ANALYZER] Error analyzing ${methodCall.className}.${methodCall.methodName}:`, error);
         
-        if (stream) {
+        if (stream && this.debugStreaming) {
           stream.markdown(`❌ Error analyzing \`${methodCall.className}.${methodCall.methodName}()\`: ${error instanceof Error ? error.message : 'Unknown error'}\n\n`);
         }
         
@@ -1417,6 +1489,186 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
   }
 
   /**
+   * Generate enhanced narrative section using LLM
+   */
+  private async generateEnhancedNarrative(analysis: MethodAnalysis, flowContent: string): Promise<string> {
+    try {
+      // Get available models first
+      const models = await vscode.lm.selectChatModels({ vendor: 'copilot' });
+      if (models.length === 0) {
+        throw new Error('No GitHub Copilot models available');
+      }
+
+      // Create comprehensive choices that combine narrative decision + model selection
+      const currentModelName = this.selectedModel ? this.getModelDisplayName(this.selectedModel) : models[0] ? this.getModelDisplayName(models[0]) : 'Default Model';
+      
+      const choices = [
+        'No enhanced narrative',
+        `Enhanced narrative with current model (${currentModelName})`,
+        'Enhanced narrative with different model...'
+      ];
+
+      const userChoice = await vscode.window.showInformationMessage(
+        'Generate detailed book-like narrative for this flow analysis?',
+        { modal: true },
+        ...choices
+      );
+
+      if (!userChoice || userChoice === 'No enhanced narrative') {
+        return '';
+      }
+
+      let selectedModel = this.selectedModel || models[0];
+
+      // If user wants to choose a different model
+      if (userChoice === 'Enhanced narrative with different model...') {
+        // Show model selection with power ratings
+        const modelItems = models.map((model, index) => ({
+          label: `${this.getModelDisplayName(model)}${this.getModelPowerIndicator(model)}`,
+          description: this.getDetailedModelDescription(model),
+          model: model
+        }));
+
+        const selectedItem = await vscode.window.showQuickPick(modelItems, {
+          placeHolder: 'Select a model for detailed narrative generation (more powerful = better narrative)',
+          title: 'Choose Model for Enhanced Analysis',
+          ignoreFocusOut: true
+        });
+
+        if (selectedItem) {
+          selectedModel = selectedItem.model;
+        } else {
+          return ''; // User cancelled
+        }
+      }
+
+      if (!selectedModel) {
+        return '';
+      }
+
+      // Build enhanced narrative prompt
+      const narrativePrompt = this.buildNarrativePrompt(analysis, flowContent);
+      
+      const messages = [vscode.LanguageModelChatMessage.User(narrativePrompt)];
+      
+      // Send request to model
+      const response = await selectedModel.sendRequest(messages, {});
+      
+      let narrativeText = '';
+      for await (const fragment of response.text) {
+        narrativeText += fragment;
+      }
+
+      return `
+
+---
+
+## 📖 Detailed Execution Chronicle
+
+> *This section provides a comprehensive, book-like narrative of the code execution, generated using ${this.getModelDisplayName(selectedModel)} for maximum detail and clarity.*
+
+${narrativeText}
+
+`;
+
+    } catch (error) {
+      console.error('[ANALYZER] Error generating enhanced narrative:', error);
+      return `
+
+---
+
+## 📖 Detailed Execution Chronicle
+
+⚠️ **Error generating enhanced narrative**: ${error instanceof Error ? error.message : 'Unknown error'}
+
+*The basic flow analysis above provides the core execution details.*
+
+`;
+    }
+  }
+
+  /**
+   * Get power indicator for model selection
+   */
+  private getModelPowerIndicator(model: vscode.LanguageModelChat): string {
+    // Use generic power indicator based on available model properties
+    const family = model.family || '';
+    const vendor = model.vendor || '';
+    
+    // Provide general classification - let the user decide based on model name
+    return ' 🚀 (AI Model)';
+  }
+
+  /**
+   * Get detailed model description for narrative generation
+   */
+  private getDetailedModelDescription(model: vscode.LanguageModelChat): string {
+    // Use model family and vendor information to provide description
+    const family = model.family || '';
+    const vendor = model.vendor || '';
+    const name = this.getModelDisplayName(model);
+    
+    // Generic description using available model properties
+    return `${vendor} ${family} model - Available for enhanced narrative generation`;
+  }
+
+  /**
+   * Build narrative prompt for LLM
+   */
+  private buildNarrativePrompt(analysis: MethodAnalysis, flowContent: string): string {
+    return `You are a technical documentation expert specializing in creating detailed, book-like narratives of code execution flows.
+
+Your task is to transform the following technical flow analysis into a comprehensive, engaging narrative that reads like a technical book chapter. The narrative should be:
+
+1. **Sequential and Linear**: Follow the exact execution order step by step
+2. **Maximally Detailed**: Explain every operation, decision, and transformation
+3. **Technical but Readable**: Use precise technical terms but explain their significance
+4. **Contextual**: Explain WHY each step happens, not just WHAT happens
+5. **Comprehensive**: Cover data structures, algorithms, business logic, and architectural patterns
+
+**Method Being Analyzed:**
+\`${analysis.className}.${analysis.methodName}()\`
+
+**Language:** ${analysis.language}
+
+**Original Flow Analysis:**
+${flowContent}
+
+**Additional Context:**
+- Execution Blocks: ${analysis.executionBlocks.length}
+- Method Calls: ${analysis.methodCallSummary.stepInto.length + analysis.methodCallSummary.objectLookup.length + analysis.methodCallSummary.external.length}
+- Classification: ${analysis.methodCallSummary.stepInto.length} Step Into, ${analysis.methodCallSummary.objectLookup.length} Object Lookup, ${analysis.methodCallSummary.external.length} External
+
+**Your Task:**
+Transform this into a detailed narrative with the following structure:
+
+### Chapter-based Structure:
+- **Chapter 1: Method Invocation & Setup** - Entry point, parameters, initial state
+- **Chapter 2-N: Execution Phases** - Group related operations into logical chapters
+- **Final Chapter: Completion & Return** - Final operations and return value
+
+### For Each Step, Include:
+- **What happens** (the operation)
+- **Why it happens** (business/technical reasoning)  
+- **How it happens** (algorithm/mechanism)
+- **Data transformations** (input → processing → output)
+- **Decision points** (conditional logic and branching)
+- **Performance implications** (memory, CPU, business impact)
+- **Error scenarios** (what could go wrong)
+- **Architectural patterns** (design patterns in use)
+
+### Writing Style:
+- Use engaging, narrative language while maintaining technical accuracy
+- Include code snippets where helpful for understanding
+- Use analogies and metaphors to explain complex concepts
+- Structure with clear headings and subheadings
+- Include tables or lists for complex data transformations
+- Add cross-references between related operations
+
+**Generate a comprehensive narrative that someone could read to fully understand this code execution without looking at the original code.**`;
+  }
+
+  /**
    * Write the flow analysis report to a README.md file next to the analyzed class
    */
   private async writeFlowReportToFile(analysis: MethodAnalysis, flowContent: string): Promise<string> {
@@ -1425,6 +1677,9 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
       const fileInfo = await this.getFileInfo(analysis.className);
       const classFileDir = path.dirname(fileInfo.filePath);
       const readmeFilePath = path.join(classFileDir, `${analysis.className}_FlowAnalysis.md`);
+      
+      // Generate enhanced narrative section if user wants it
+      const enhancedNarrative = await this.generateEnhancedNarrative(analysis, flowContent);
       
       // Create comprehensive report content
       const reportContent = `# Flow Analysis Report
@@ -1438,6 +1693,8 @@ export class CodeFlowAnalyzer implements FlowAnalyzer {
 ---
 
 ${flowContent}
+
+${enhancedNarrative}
 
 ---
 
@@ -1664,17 +1921,41 @@ ${flowContent}
   }
 
   /**
-   * Get cache statistics
+   * Get cache statistics including both in-memory and persistent cache
    */
-  getCacheStats(): CacheStats {
-    return this.cache.getStats();
+  getCacheStats(): CacheStats & { persistent?: { entryCount: number; cacheFilePath: string; totalSizeKB: number } } {
+    const inMemoryStats = this.cache.getStats();
+    
+    if (this.persistentCache) {
+      const persistentStats = this.persistentCache.getStats();
+      return {
+        ...inMemoryStats,
+        persistent: persistentStats
+      };
+    }
+    
+    return inMemoryStats;
   }
 
   /**
-   * Clear the cache
+   * Clear both in-memory and persistent cache
    */
   clearCache(): void {
     this.cache.clear();
+    if (this.persistentCache) {
+      this.persistentCache.clear();
+      console.log('[ANALYZER] Cleared persistent cache');
+    }
+  }
+
+  /**
+   * Clear only the persistent cache (keeps in-memory cache for current session)
+   */
+  clearPersistentCache(): void {
+    if (this.persistentCache) {
+      this.persistentCache.clear();
+      console.log('[ANALYZER] Cleared persistent cache only');
+    }
   }
 
   /**
